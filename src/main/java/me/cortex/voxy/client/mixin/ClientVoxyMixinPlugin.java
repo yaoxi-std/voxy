@@ -11,7 +11,6 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
   private static boolean valkyrienSkiesInstalled;
   private static boolean nvidiumInstalled;
-  private static boolean connectorInstalled = false;
   private static boolean sableInstalled = false;
   private static boolean sodiumInstalled = false;
 
@@ -21,7 +20,6 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     var platform = PlatformAccess.get();
     valkyrienSkiesInstalled = platform.isModLoaded("valkyrienskies");
     nvidiumInstalled = platform.isModLoaded("nvidium");
-    connectorInstalled = platform.isModLoaded("connector");
     sableInstalled = platform.isModLoaded("sable");
     sodiumInstalled = platform.isModLoaded("sodium");
   }
@@ -38,10 +36,6 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
       mixins.add("sodium.MixinSodiumWorldRendererVS");
     } else {
       mixins.add("sodium.MixinDefaultChunkRenderer");
-    }
-
-    if (connectorInstalled) {
-      mixins.add("sodium.MixinShaderLoader");
     }
 
     if (sableInstalled) {
