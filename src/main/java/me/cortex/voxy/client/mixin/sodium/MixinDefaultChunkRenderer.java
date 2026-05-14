@@ -36,6 +36,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
       ChunkRenderListIterable renderLists,
       TerrainRenderPass renderPass,
       CameraTransform camera,
+      boolean indexedRenderingEnabled,
       CallbackInfo ci) {
     if (renderPass.isTranslucent() && !IrisUtil.irisShaderPackEnabled()) {
       this.renderVoxyTranslucent(matrices, camera);
@@ -62,6 +63,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
       ChunkRenderListIterable renderLists,
       TerrainRenderPass renderPass,
       CameraTransform camera,
+      boolean indexedRenderingEnabled,
       CallbackInfo ci) {
     this.doRender(matrices, renderLists, renderPass, camera);
   }

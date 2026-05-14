@@ -16,9 +16,8 @@ import me.cortex.voxy.common.platform.PlatformAccess;
 import me.cortex.voxy.common.util.cpu.CpuLayout;
 import me.cortex.voxy.impl.VoxyCommon;
 import me.cortex.voxy.impl.compat.sable.SableContraptionRenderDistance;
-import net.caffeinemc.mods.sodium.client.gui.options.storage.OptionStorage;
 
-public class VoxyConfig implements OptionStorage<VoxyConfig> {
+public class VoxyConfig {
   private static final Gson GSON =
       new GsonBuilder()
           .setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES)
@@ -124,11 +123,6 @@ public class VoxyConfig implements OptionStorage<VoxyConfig> {
 
   private static Path getConfigPath() {
     return PlatformAccess.get().getConfigDir().resolve("voxy-config.json");
-  }
-
-  @Override
-  public VoxyConfig getData() {
-    return this;
   }
 
   public boolean isRenderingEnabled() {
