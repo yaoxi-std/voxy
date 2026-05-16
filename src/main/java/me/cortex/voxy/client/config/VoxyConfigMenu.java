@@ -135,7 +135,43 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                         ()->CFG.getSSAOMode(), v->CFG.setSSAOMode(v))
                                         .setImpact(OptionImpact.MEDIUM)//TODO make it on igpus this is high
                                         .setPostChangeFlags(RENDER_RELOAD)
-                        ).setEnablerInherit(s->!IrisUtil.irisShadersEnabledInConfig(), ConfigState.UPDATE_ON_REBUILD)
+                        ), new Group(
+                                new BoolOption(
+                                        "voxy:adapt_cloud_distance",
+                                        Component.translatable("voxy.config.general.adaptCloudDistance"),
+                                        ()->CFG.adaptCloudDistance, v->CFG.adaptCloudDistance=v)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new IntOption(
+                                        "voxy:cloud_distance",
+                                        Component.translatable("voxy.config.general.cloudDistance"),
+                                        ()->CFG.cloudDistance, v->CFG.cloudDistance=v,
+                                        new Range(0, 1024, 1))
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD)
+                        ), new Group(
+                                new IntOption(
+                                        "voxy:fog_intensity",
+                                        Component.translatable("voxy.config.general.fogIntensity"),
+                                        ()->Math.round(CFG.fogIntensity * 100), v->CFG.fogIntensity=v / 100,
+                                        new Range(0, 100, 1))
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new IntOption(
+                                        "voxy:fog_density",
+                                        Component.translatable("voxy.config.general.fogDensity"),
+                                        ()->Math.round(CFG.fogDensity * 100), v->CFG.fogDensity=v / 100,
+                                        new Range(0, 100, 1))
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD),
+                                new IntOption(
+                                        "voxy:sky_fog_distance",
+                                        Component.translatable("voxy.config.general.skyFogDistance"),
+                                        ()->CFG.skyFogDistance, v->CFG.skyFogDistance=v,
+                                        new Range(0, 1024, 1))
+                                        .setImpact(OptionImpact.LOW)
+                                        .setPostChangeFlags(RENDER_RELOAD)
+                        )
+                        .setEnablerInherit(s->!IrisUtil.irisShadersEnabledInConfig(), ConfigState.UPDATE_ON_REBUILD)
                 ).setEnablerAND("voxy:enabled", "voxy:rendering"));
 
     }
