@@ -35,5 +35,12 @@
   "voxy.config.general.ssao_mode.auto": "Auto",
   "voxy.config.general.ssao_mode.basic": "Basic",
   "voxy.config.general.ssao_mode.better": "Better",
-  "voxy.config.general.ssao_mode.best": "Best"
+  "voxy.config.general.ssao_mode.best": "Best",
+
+  "voxy.config.general.adaptCloudDistance": "Adaptive cloud distance",
+  "voxy.config.general.cloudDistance": "Cloud distance",
+
+  "voxy.config.general.fogIntensity": "Fog intensity",
+  "voxy.config.general.fogDensity": "Fog density",
+  "voxy.config.general.skyFogDistance": "Sky fog distance"
 }
