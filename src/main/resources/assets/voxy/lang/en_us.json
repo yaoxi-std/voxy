@@ -38,9 +38,14 @@
   "voxy.config.general.ssao_mode.best": "Best",
 
   "voxy.config.general.adaptCloudDistance": "Adaptive cloud distance",
+  "voxy.config.general.adaptCloudDistance.tooltip": "Enables or disables adaptive cloud distance",
   "voxy.config.general.cloudDistance": "Cloud distance",
+  "voxy.config.general.cloudDistance.tooltip": "Cloud distance in chunks (Only used if adaptive cloud distance is disabled)",
 
   "voxy.config.general.fogIntensity": "Fog intensity",
+  "voxy.config.general.fogIntensity.tooltip": "Intensity of the fog, higher values make the fog thicker and reduce visibility",
   "voxy.config.general.fogDensity": "Fog density",
-  "voxy.config.general.skyFogDistance": "Sky fog distance"
+  "voxy.config.general.fogDensity.tooltip": "Density of the fog, higher values make the fog thicker",
+  "voxy.config.general.skyFogDistance": "Sky fog distance",
+  "voxy.config.general.skyFogDistance.tooltip": "Distance at which sky fog starts to render in chunks"
 }
