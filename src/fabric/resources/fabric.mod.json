@@ -20,6 +20,9 @@
     "client": [
       "me.cortex.voxy.client.FabricVoxyClient"
     ],
+    "sodium:config_api_user": [
+      "me.cortex.voxy.client.config.VoxyConfigMenu"
+    ],
     "modmenu": [
       "me.cortex.voxy.client.config.ModMenuIntegration"
     ],

@@ -133,12 +133,35 @@ def shadedDependenciesConfig = configurations.create('shadedDependencies') {
     transitive = false
 }
 
+// Sodium's NeoForge release is a service-loader wrapper whose actual mod is a nested jar. ModDev
+// correctly uses the wrapper at runtime, but javac cannot see nested classes, so extract only the
+// official inner mod jar into build/ for the compile classpath.
+def sodiumNeoForgeWrapped = configurations.create('sodiumNeoForgeWrapped') {
+    canBeConsumed = false
+    canBeResolved = true
+    transitive = false
+}
+def sodiumNeoForgeCompileDir = layout.buildDirectory.dir('sodium-compile')
+def sodiumNeoForgeCompileJar = sodiumNeoForgeCompileDir.map { it.file('sodium-neoforge-mod.jar') }
+
+tasks.register('extractSodiumNeoForgeCompileJar', Copy) {
+    from({ zipTree(sodiumNeoForgeWrapped.singleFile) }) {
+        include 'META-INF/jarjar/net.caffeinemc.sodium-neoforge-*-mod.jar'
+        eachFile { details -> details.path = 'sodium-neoforge-mod.jar' }
+        includeEmptyDirs = false
+    }
+    into sodiumNeoForgeCompileDir
+    outputs.file sodiumNeoForgeCompileJar
+}
+
 project.ext.lwjglVersion = "3.3.3"
 
 dependencies {
-    // Sodium 0.6.13 ships a normal neoforge mod jar on Modrinth with classes at the root,
-    // so it is usable both for compiling and as a dev runtime mod.
-    implementation "maven.modrinth:sodium:mc1.21.1-0.6.13-neoforge"
+    add('sodiumNeoForgeWrapped', "maven.modrinth:sodium:mc1.21.1-0.8.12-neoforge")
+    compileOnly files(sodiumNeoForgeCompileJar)
+    if (!isInGHA) {
+        runtimeOnly "maven.modrinth:sodium:mc1.21.1-0.8.12-neoforge"
+    }
 
     implementation "maven.modrinth:lithium:mc1.21.1-0.15.0-neoforge"
 
@@ -147,16 +170,18 @@ dependencies {
     compileOnly "maven.modrinth:sable:${project.sable_neoforge_version}"
     compileOnly "dev.ryanhcode.sable-companion:sable-companion-common-${project.minecraft_version}:${project.sable_companion_version}"
 
-    compileOnly "drouarb:nvidium:0.4.1-beta9:1.21-1.21.1@jar"
+    compileOnly("drouarb:nvidium:0.4.1-beta9:1.21-1.21.1@jar") {
+        transitive = false
+    }
 
-    compileOnly "maven.modrinth:iris:1.8.8+1.21.1-neoforge"
+    compileOnly "maven.modrinth:iris:1.8.14-beta.1+1.21.1-neoforge"
     if (!isInGHA) {
-        runtimeOnly "maven.modrinth:iris:1.8.8+1.21.1-neoforge"
+        runtimeOnly "maven.modrinth:iris:1.8.14-beta.1+1.21.1-neoforge"
         runtimeOnly "io.github.douira:glsl-transformer:2.0.1"
         runtimeOnly "org.anarres:jcpp:1.4.14"
     }
 
-    compileOnly "maven.modrinth:sodium-extra:mc1.21.1-0.6.0+neoforge"
+    // Sodium Extra 0.6 targets Sodium 0.6 and is intentionally omitted from this dev runtime.
 
     compileOnly "maven.modrinth:chunky:1.4.23-neoforge"
 
@@ -202,6 +227,10 @@ dependencies {
     shadedDependencies "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos"
     shadedDependencies "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-macos-arm64"
     shadedDependencies "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-macos-arm64"
+}
+
+tasks.named('compileJava') {
+    dependsOn tasks.named('extractSodiumNeoForgeCompileJar')
 }
 
 // Dev runs don't receive the shaded libraries on their classpath; the moddev

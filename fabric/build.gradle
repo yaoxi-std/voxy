@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version "1.11-SNAPSHOT"
+    id 'fabric-loom' version "1.16-SNAPSHOT"
     id 'maven-publish'
 }
 
@@ -123,9 +123,8 @@ dependencies {
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    //TODO: this is to eventually not need sodium installed as atm its just used for parsing shaders
-    modRuntimeOnlyMsk "maven.modrinth:sodium:mc1.21.1-0.6.13-fabric"
-    modCompileOnly "maven.modrinth:sodium:mc1.21.1-0.6.13-fabric"
+    modRuntimeOnlyMsk "maven.modrinth:sodium:mc1.21.1-0.8.12-fabric"
+    modCompileOnly "maven.modrinth:sodium:mc1.21.1-0.8.12-fabric"
 
     modImplementation("maven.modrinth:lithium:mc1.21.1-0.15.0-fabric")
 
@@ -134,22 +133,22 @@ dependencies {
     compileOnly("maven.modrinth:sable:${project.sable_neoforge_version}")
     compileOnly("dev.ryanhcode.sable-companion:sable-companion-common-${project.minecraft_version}:${project.sable_companion_version}")
 
-    modRuntimeOnlyMsk "drouarb:nvidium:0.4.1-beta9:1.21-1.21.1@jar"
-    modCompileOnly "drouarb:nvidium:0.4.1-beta9:1.21-1.21.1@jar"
+    // Nvidium has no Sodium 0.8 build yet. Keep its API compile-only for the optional mixin,
+    // without pulling Sodium 0.6 transitively or adding Nvidium to the dev runtime.
+    modCompileOnly("drouarb:nvidium:0.4.1-beta9:1.21-1.21.1@jar") {
+        transitive = false
+    }
 
     modCompileOnly("maven.modrinth:modmenu:11.0.3")
     modRuntimeOnlyMsk("maven.modrinth:modmenu:11.0.3")
 
-    // Note: no 1.8.12 fabric build exists (reference used 1.8.12 neoforge); 1.8.8 is the newest
-    // fabric release compatible with Sodium 0.6.x.
-    modCompileOnly("maven.modrinth:iris:1.8.8+1.21.1-fabric")
-    modRuntimeOnlyMsk("maven.modrinth:iris:1.8.8+1.21.1-fabric")
+    modCompileOnly("maven.modrinth:iris:1.8.14-beta.1+1.21.1-fabric")
+    modRuntimeOnlyMsk("maven.modrinth:iris:1.8.14-beta.1+1.21.1-fabric")
     // iris needs these for some reason
     modRuntimeOnlyMsk("io.github.douira:glsl-transformer:2.0.1")
     modRuntimeOnlyMsk("org.anarres:jcpp:1.4.14")
 
-    modCompileOnly("maven.modrinth:sodium-extra:mc1.21.1-0.6.0+fabric")
-    modRuntimeOnlyMsk("maven.modrinth:sodium-extra:mc1.21.1-0.6.0+fabric")
+    // Sodium Extra 0.6 targets Sodium 0.6 and is intentionally omitted from this dev runtime.
 
     modCompileOnly("maven.modrinth:chunky:1.4.23-fabric")
     modRuntimeOnlyMsk("maven.modrinth:chunky:1.4.23-fabric")

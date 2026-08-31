@@ -1,8 +1,9 @@
 package me.cortex.voxy.client.config;
 
-import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.impl.VoxyCommon;
-import net.caffeinemc.mods.sodium.client.gui.SodiumOptionsGUI;
+import net.caffeinemc.mods.sodium.client.config.ConfigManager;
+import net.caffeinemc.mods.sodium.client.config.structure.OptionPage;
+import net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen;
 import net.minecraft.client.gui.screens.Screen;
 
 /**
@@ -14,19 +15,17 @@ public class VoxyConfigScreenFactory {
     if (!VoxyCommon.isAvailable()) {
       return null;
     }
-    var screen = (SodiumOptionsGUI) SodiumOptionsGUI.createScreen(parent);
-    // Sorry jelly and douira, please dont hurt me
-    try {
-      // We cant use .setPage() as that invokes rebuildGui, however the screen hasnt been initalized
-      // yet
-      // causing things to crash
-      var field = SodiumOptionsGUI.class.getDeclaredField("currentPage");
-      field.setAccessible(true);
-      field.set(screen, VoxyConfigScreenPages.voxyOptionPage);
-      field.setAccessible(false);
-    } catch (Exception e) {
-      Logger.error("Failed to set the current page to voxy", e);
+    OptionPage firstVoxyPage = null;
+    if (ConfigManager.CONFIG != null) {
+      firstVoxyPage =
+          ConfigManager.CONFIG.getModOptions().stream()
+              .filter(options -> options.configId().equals("voxy"))
+              .flatMap(options -> options.pages().stream())
+              .filter(OptionPage.class::isInstance)
+              .map(OptionPage.class::cast)
+              .findFirst()
+              .orElse(null);
     }
-    return screen;
+    return VideoSettingsScreen.createScreen(parent, firstVoxyPage);
   }
 }

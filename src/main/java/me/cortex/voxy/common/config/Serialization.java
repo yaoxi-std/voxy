@@ -114,8 +114,10 @@ public class Serialization {
       if (clzName.contains("ModMenuIntegration")) {
         continue; // Dont want to modmenu incase it doesnt exist
       }
-      if (clzName.contains("VoxyConfigScreenPages")) {
-        continue; // Dont want to modmenu incase it doesnt exist
+      if (clzName.contains("VoxyConfigMenu")
+          || clzName.contains("VoxyConfigScreenFactory")
+          || clzName.contains("SodiumConfigBuilder")) {
+        continue; // Config UI classes are not serialization definitions.
       }
       if (clzName.endsWith("VoxyConfig")) {
         continue; // Special case to prevent recursive loading pain
