@@ -133,9 +133,9 @@ def shadedDependenciesConfig = configurations.create('shadedDependencies') {
     transitive = false
 }
 
-// Sodium's NeoForge release is a service-loader wrapper whose actual mod is a nested jar. ModDev
-// correctly uses the wrapper at runtime, but javac cannot see nested classes, so extract only the
-// official inner mod jar into build/ for the compile classpath.
+// Sodium's NeoForge release is a service-loader wrapper whose actual mod is a nested jar. Javac
+// cannot see nested classes, and ModDev isolates the wrapper and nested mod as split packages.
+// Extract the official inner mod for compilation and merge it with the wrapper for dev runtime.
 def sodiumNeoForgeWrapped = configurations.create('sodiumNeoForgeWrapped') {
     canBeConsumed = false
     canBeResolved = true
@@ -153,14 +153,50 @@ tasks.register('extractSodiumNeoForgeCompileJar', Copy) {
     into sodiumNeoForgeCompileDir
     outputs.file sodiumNeoForgeCompileJar
 }
+def sodiumNeoForgeModJar = files(sodiumNeoForgeCompileJar).builtBy(tasks.named('extractSodiumNeoForgeCompileJar'))
+
+def sodiumNeoForgeDevJarTask = tasks.register('buildSodiumNeoForgeDevJar', Jar) {
+    dependsOn tasks.named('extractSodiumNeoForgeCompileJar')
+    archiveFileName = 'sodium-neoforge-dev.jar'
+    destinationDirectory = layout.buildDirectory.dir('sodium-dev')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from({ zipTree(sodiumNeoForgeWrapped.singleFile) }) {
+        exclude 'META-INF/MANIFEST.MF'
+        exclude 'META-INF/jarjar/**'
+        // The merged jar is already a normal mod candidate; recursively locating the wrapper is wrong.
+        exclude 'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'
+    }
+    from({ zipTree(sodiumNeoForgeCompileJar.get().asFile) }) {
+        exclude 'META-INF/MANIFEST.MF'
+    }
+    manifest {
+        attributes('Automatic-Module-Name': 'sodium')
+    }
+}
+def sodiumNeoForgeDevJar = files(sodiumNeoForgeDevJarTask.flatMap { it.archiveFile }).builtBy(sodiumNeoForgeDevJarTask)
+
+def sodiumNeoForgeDevLibrariesDir = layout.buildDirectory.dir('sodium-dev-libraries')
+def sodiumNeoForgeDevLibrariesTask = tasks.register('extractSodiumNeoForgeDevLibraries', Sync) {
+    from({ zipTree(sodiumNeoForgeWrapped.singleFile) }) {
+        include 'META-INF/jarjar/fabric-*.jar'
+        eachFile { details -> details.path = details.name }
+        includeEmptyDirs = false
+    }
+    into sodiumNeoForgeDevLibrariesDir
+}
+def sodiumNeoForgeDevLibraries = files({
+    fileTree(sodiumNeoForgeDevLibrariesDir.get().asFile) { include '*.jar' }
+}).builtBy(sodiumNeoForgeDevLibrariesTask)
 
 project.ext.lwjglVersion = "3.3.3"
 
 dependencies {
     add('sodiumNeoForgeWrapped', "maven.modrinth:sodium:mc1.21.1-0.8.12-neoforge")
-    compileOnly files(sodiumNeoForgeCompileJar)
+    compileOnly sodiumNeoForgeModJar
     if (!isInGHA) {
-        runtimeOnly "maven.modrinth:sodium:mc1.21.1-0.8.12-neoforge"
+        runtimeOnly sodiumNeoForgeDevJar
+        runtimeOnly sodiumNeoForgeDevLibraries
     }
 
     implementation "maven.modrinth:lithium:mc1.21.1-0.15.0-neoforge"

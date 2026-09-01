@@ -143,10 +143,13 @@ dependencies {
     modRuntimeOnlyMsk("maven.modrinth:modmenu:11.0.3")
 
     modCompileOnly("maven.modrinth:iris:1.8.14-beta.1+1.21.1-fabric")
-    modRuntimeOnlyMsk("maven.modrinth:iris:1.8.14-beta.1+1.21.1-fabric")
-    // iris needs these for some reason
-    modRuntimeOnlyMsk("io.github.douira:glsl-transformer:2.0.1")
-    modRuntimeOnlyMsk("org.anarres:jcpp:1.4.14")
+    // The 1.21.1 Fabric beta has an incomplete development refmap and crashes under Loom.
+    // Keep the normal Sodium/Voxy run usable; supply a fixed version explicitly when available.
+    if (project.hasProperty('irisRuntimeVersion')) {
+        modRuntimeOnlyMsk("maven.modrinth:iris:${project.property('irisRuntimeVersion')}")
+        modRuntimeOnlyMsk("io.github.douira:glsl-transformer:2.0.1")
+        modRuntimeOnlyMsk("org.anarres:jcpp:1.4.14")
+    }
 
     // Sodium Extra 0.6 targets Sodium 0.6 and is intentionally omitted from this dev runtime.
 
