@@ -19,7 +19,7 @@ NeoForge builds and a macOS-compatible GL 4.1 + Metal rendering path.
 | Minecraft | 1.21.1 |
 | Java | 21 |
 | Loaders | Fabric and NeoForge |
-| Sodium | 0.6.x |
+| Sodium | 0.8.12 |
 | Iris | 1.8.x; shader-pack compatibility varies |
 | Render backends | GL46 and experimental GL41Metal |
 

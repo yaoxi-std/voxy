@@ -18,7 +18,7 @@ OpenGL 4.1 + Metal 渲染路径。
 | Minecraft | 1.21.1 |
 | Java | 21 |
 | 加载器 | Fabric、NeoForge |
-| Sodium | 0.6.x |
+| Sodium | 0.8.12 |
 | Iris | 1.8.x；具体光影包兼容性可能不同 |
 | 渲染后端 | GL46、实验性 GL41Metal |
 
