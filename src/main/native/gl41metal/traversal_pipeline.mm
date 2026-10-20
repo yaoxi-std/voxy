@@ -32,6 +32,17 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_s
     }
 
     TerrainResources* terrain = context->terrain.get();
+    terrain->currentFrame = static_cast<uint32_t>(frameId);
+    // Pressure changes the screen-area budget; the Metal traverser still chooses every LOD.
+    // Hysteresis lets collapsed subtrees stay coarse instead of being requested immediately again.
+    uint32_t elapsed = terrain->currentFrame - terrain->lastLodAdjustment;
+    if (terrain->geometryPressure && elapsed >= 60) {
+      terrain->lodScale = std::min(4096.0f, terrain->lodScale * 2.25f);
+      terrain->lastLodAdjustment = terrain->currentFrame;
+    } else if (terrain->geometryFill < 0.4 && elapsed >= 300) {
+      terrain->lodScale = std::max(1.0f, terrain->lodScale / 2.25f);
+      terrain->lastLodAdjustment = terrain->currentFrame;
+    }
     {
       std::lock_guard<std::mutex> lock(context->mutex);
       Slot& slot = context->slots[slotIndex];
@@ -94,18 +105,18 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_s
       minScreenSpaceSize =
           (threshold * threshold) / static_cast<float>(viewportWidth * viewportHeight);
     }
-    scene->renderParams[0] = minScreenSpaceSize;
+    scene->renderParams[0] = minScreenSpaceSize * terrain->lodScale;
     scene->renderParams[1] = earthRadius;
     scene->renderParams[2] = std::max(0.0f, nearExclusionRadius);
     scene->renderParams[3] = std::max(0.0f, renderDistanceSquared);
     scene->queueSizes[0] = static_cast<uint32_t>(terrain->maxWorklistItems);
-    scene->queueSizes[1] = static_cast<uint32_t>(terrain->maxTraversalRequests);
+    scene->queueSizes[1] = static_cast<uint32_t>(terrain->requestBudget);
     scene->queueSizes[2] = static_cast<uint32_t>(terrain->maxTraversalQueue);
     scene->queueSizes[3] = static_cast<uint32_t>(terrain->topNodeCount);
     scene->viewport[0] = static_cast<uint32_t>(std::max(0, viewportWidth));
     scene->viewport[1] = static_cast<uint32_t>(std::max(0, viewportHeight));
-    scene->viewport[2] = 0;
-    scene->viewport[3] = 0;
+    scene->viewport[2] = terrain->nodeSpan;
+    scene->viewport[3] = terrain->geometryPressure ? 1 : 0;
     scene->rasterLimits[0] = static_cast<uint32_t>(terrain->maxOpaqueRangeCommands);
     scene->rasterLimits[1] = 0;
     scene->rasterLimits[2] = 0;
@@ -121,6 +132,7 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_s
       }
       encoder.label = @"Voxy LOD Traversal";
       [encoder setComputePipelineState:terrain->traversalPipeline];
+      [encoder setBuffer:terrain->lastDescended offset:0 atIndex:17];
       [encoder setBuffer:terrain->nodeBuffer offset:0 atIndex:0];
       [encoder setBuffer:terrain->sectionMetadata offset:0 atIndex:1];
       [encoder setBuffer:frame->queueMeta offset:0 atIndex:4];
@@ -153,13 +165,19 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_s
         [encoder setBytes:&queueIdx length:sizeof(queueIdx) atIndex:10];
         if (queueIdx == 0) {
           [encoder dispatchThreadgroups:MTLSizeMake(std::max<uint32_t>(1, queueMeta[0]), 1, 1)
-                         threadsPerThreadgroup:threadsPerGroup];
+                  threadsPerThreadgroup:threadsPerGroup];
         } else {
           [encoder dispatchThreadgroupsWithIndirectBuffer:frame->queueMeta
                                      indirectBufferOffset:queueIdx * 4 * sizeof(uint32_t)
                                     threadsPerThreadgroup:threadsPerGroup];
         }
         [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+      }
+      if (terrain->geometryPressure && terrain->nodeSpan != 0) {
+        [encoder setComputePipelineState:terrain->evictionPipeline];
+        [encoder setBuffer:frame->evictionQueue offset:0 atIndex:18];
+        [encoder dispatchThreads:MTLSizeMake(terrain->nodeSpan, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
       }
       [encoder endEncoding];
     }
@@ -178,19 +196,29 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_s
           uint32_t requestCount =
               reinterpret_cast<uint32_t*>([capturedFrame->requestQueue contents])[0];
           requestCount = std::min<uint32_t>(
-              requestCount, static_cast<uint32_t>(completedTerrain->maxTraversalRequests));
+              requestCount, static_cast<SceneUniformHost*>([capturedFrame->sceneUniform contents])
+                                ->queueSizes[1]);
           uint32_t* requestData =
               reinterpret_cast<uint32_t*>([capturedFrame->requestQueue contents]) + 1;
-          completedTerrain->pendingRequests.clear();
-          completedTerrain->pendingRequests.reserve(requestCount);
+          completedTerrain->pendingRequests.reserve(completedTerrain->pendingRequests.size() +
+                                                    requestCount);
           for (uint32_t i = 0; i < requestCount; i++) {
             completedTerrain->pendingRequests.push_back(
                 (static_cast<uint64_t>(requestData[i * 2]) << 32) | requestData[i * 2 + 1]);
           }
         }
+        if (completedTerrain != nullptr) {
+          auto* evictions = static_cast<uint32_t*>([capturedFrame->evictionQueue contents]);
+          uint32_t count = std::min<uint32_t>(evictions[0], 256);
+          completedTerrain->pendingEvictions.clear();
+          for (uint32_t i = 0; i < count; i++) {
+            completedTerrain->pendingEvictions.push_back(
+                (static_cast<uint64_t>(evictions[1 + i * 2]) << 32) | evictions[2 + i * 2]);
+          }
+        }
         Slot& completedSlot = capturedContext->slots[capturedSlot];
-        uint32_t translucentCount = reinterpret_cast<uint32_t*>(
-            [capturedFrame->translucentWorklistCounter contents])[0];
+        uint32_t translucentCount =
+            reinterpret_cast<uint32_t*>([capturedFrame->translucentWorklistCounter contents])[0];
         completedSlot.translucentValid = translucentCount != 0;
         if (completedSlot.state == SlotState::MetalSubmitted) {
           completedSlot.state = SlotState::MetalReady;

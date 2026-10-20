@@ -152,6 +152,7 @@ ext.voxyRunProperties = {
         'voxy.renderBackend': System.getProperty('voxy.renderBackend', 'auto'),
     ]
     [
+        'voxy.validation.durationSeconds'    : '180',
         'voxy.gl41metal.slotCount'            : '3',
         'voxy.gl41metal.waitTimeoutMs'        : '0',
         'voxy.gl41metal.visibleComposite'     : 'true',
@@ -161,6 +162,7 @@ ext.voxyRunProperties = {
         'voxy.gl41metal.maxTraversalQueue'    : '200000',
         'voxy.gl41metal.maxTraversalRequests' : '1024',
         'voxy.gl41metal.maxWorklistItems'     : '400000',
+        'voxy.gl41metal.logGeometryBudget'    : 'false',
         'voxy.gl41metal.dumpShaders'          : 'false',
         'voxy.gl41metal.boundVerticalMargin'  : '1',
         'voxy.gl41metal.boundHorizontalMargin': '0',

@@ -168,6 +168,13 @@ public final class NativeBindings {
 
   public static native void removeTopNode(long handle, int nodeId);
 
+  public static native boolean canUpdateTerrain(long handle);
+
+  public static native void setGeometryBudget(
+      long handle, long usedBytes, long capacityBytes, boolean pressure, int requestBudget);
+
+  public static native long[] pollEvictionCandidates(long handle);
+
   public static native long[] pollTraversalRequests(long handle);
 
   public static native void clearTraversalWorklist(long handle);

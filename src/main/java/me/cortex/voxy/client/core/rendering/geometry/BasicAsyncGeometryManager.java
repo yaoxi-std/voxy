@@ -39,6 +39,25 @@ public class BasicAsyncGeometryManager implements GeometryManager {
   }
 
   @Override
+  public boolean canUpload(int oldId, BuiltSection section) {
+    if (section.isEmpty()) return true;
+    if (oldId < 0 && this.allocationSet.getCount() >= this.allocationSet.getLimit()) return false;
+    int size = alignedElements(section);
+    return (oldId >= 0
+            && this.allocationHeap.getSize(
+                    Integer.toUnsignedLong(this.sectionMetadata.get(oldId).geometryPtr))
+                >= size)
+        || this.allocationHeap.canAllocate(size);
+  }
+
+  private static int alignedElements(BuiltSection section) {
+    if (section.geometryBuffer.size % GEOMETRY_ELEMENT_SIZE != 0) {
+      throw new IllegalArgumentException("Unaligned geometry");
+    }
+    return Math.toIntExact((section.geometryBuffer.size / GEOMETRY_ELEMENT_SIZE + 127) & ~127L);
+  }
+
+  @Override
   public int uploadSection(BuiltSection section) {
     return this.uploadReplaceSection(-1, section);
   }
@@ -47,6 +66,33 @@ public class BasicAsyncGeometryManager implements GeometryManager {
   public int uploadReplaceSection(int oldId, BuiltSection section) {
     if (section.isEmpty()) {
       throw new IllegalArgumentException("sectionData is empty, cannot upload nothing");
+    }
+
+    // Admission is checked before freeing old geometry or allocating a section id. Callers may
+    // defer a result on capacity pressure without losing the last usable mesh.
+    if (!this.canUpload(oldId, section)) {
+      throw new IllegalStateException("Geometry capacity exhausted before upload");
+    }
+
+    if (oldId >= 0) {
+      var previous = this.sectionMetadata.get(oldId);
+      if (this.allocationHeap.getSize(Integer.toUnsignedLong(previous.geometryPtr))
+          >= alignedElements(section)) {
+        // A same-sized or smaller update can replace its own allocation even when the pool is full.
+        var pending = this.heapUploads.put(previous.geometryPtr, section.geometryBuffer);
+        if (pending != null) pending.free();
+        this.sectionMetadata.set(
+            oldId,
+            new SectionMeta(
+                section.position,
+                section.aabb,
+                previous.geometryPtr,
+                Math.toIntExact(section.geometryBuffer.size / GEOMETRY_ELEMENT_SIZE),
+                section.offsets,
+                section.childExistence));
+        this.invalidatedIds.add(oldId);
+        return oldId;
+      }
     }
 
     // Free the old id and replace it with a new one

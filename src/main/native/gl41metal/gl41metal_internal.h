@@ -42,6 +42,7 @@ struct FrameResources {
   id<MTLBuffer> opaqueRangeCounter = nil;
   id<MTLBuffer> opaqueRangeCounts = nil;
   id<MTLBuffer> opaqueRangeBaseVertices = nil;
+  id<MTLBuffer> evictionQueue = nil;
   uint64_t sectionGeneration = 0;
 };
 
@@ -78,6 +79,16 @@ struct TerrainResources {
   std::vector<TerrainSectionSlot> sections;
   std::vector<uint32_t> topNodes;
   std::vector<uint64_t> pendingRequests;
+  std::vector<uint64_t> pendingEvictions;
+  id<MTLBuffer> lastDescended = nil;
+  id<MTLComputePipelineState> evictionPipeline = nil;
+  uint32_t nodeSpan = 0;
+  uint32_t currentFrame = 0;
+  int requestBudget = 64;
+  bool geometryPressure = false;
+  double geometryFill = 0;
+  float lodScale = 1;
+  uint32_t lastLodAdjustment = 0;
   id<MTLBuffer> sectionMetadata = nil;
   id<MTLBuffer> nodeBuffer = nil;
   id<MTLBuffer> topNodeBuffer = nil;

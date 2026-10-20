@@ -180,6 +180,10 @@ public class NodeManager {
     this.topLevelNodes.add(pos);
   }
 
+  public boolean hasTopLevelNode(long pos) {
+    return this.topLevelNodes.contains(pos);
+  }
+
   public void removeTopLevelNode(long pos) {
     if (!this.topLevelNodes.remove(pos)) {
       throw new IllegalStateException(
@@ -212,6 +216,40 @@ public class NodeManager {
   }
 
   // ==================================================================================================================
+
+  public boolean tryProcessGeometryResult(BuiltSection result) {
+    int node = this.activeSectionMap.get(result.position);
+    boolean watched = (this.watcher.get(result.position) & UPDATE_TYPE_BLOCK_BIT) != 0;
+    if (node != -1 && watched) {
+      int oldId;
+      if ((node & NODE_TYPE_MSK) != NODE_TYPE_REQUEST) {
+        oldId = this.nodeData.getNodeGeometry(node & NODE_ID_MSK);
+      } else if ((node & REQUEST_TYPE_MSK) == REQUEST_TYPE_SINGLE) {
+        oldId = this.singleRequests.get(node & NODE_ID_MSK).getMesh();
+      } else {
+        oldId =
+            this.childRequests.get(node & NODE_ID_MSK).getChildMesh(getChildIdx(result.position));
+      }
+      if (!this.geometryManager.canUpload(oldId, result)) return false;
+    }
+    this.processGeometryResult(result);
+    return true;
+  }
+
+  /**
+   * Collapses only an existing subtree with a ready coarse mesh. Stale GPU candidates are harmless.
+   */
+  public boolean collapseNode(long pos) {
+    int node = this.activeSectionMap.get(pos);
+    if (node == -1 || (node & NODE_TYPE_MSK) == NODE_TYPE_REQUEST) return false;
+    int id = node & NODE_ID_MSK;
+    if (this.nodeData.getNodeGeometry(id) == NULL_GEOMETRY_ID) return false;
+    if ((node & NODE_TYPE_MSK) != NODE_TYPE_INNER && !this.nodeData.isNodeRequestInFlight(id))
+      return false;
+    this.recurseRemoveChildNodes(pos);
+    this.activeSectionMap.put(pos, NODE_TYPE_LEAF | id);
+    return true;
+  }
 
   public void processGeometryResult(BuiltSection sectionResult) {
     long pos = sectionResult.position;

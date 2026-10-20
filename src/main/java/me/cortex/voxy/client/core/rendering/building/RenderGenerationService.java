@@ -6,7 +6,9 @@ import java.util.List;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.StampedLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.LongPredicate;
 import me.cortex.voxy.client.core.model.IdNotYetComputedException;
 import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
 import me.cortex.voxy.common.thread.Service;
@@ -73,6 +75,8 @@ public class RenderGenerationService {
   private final WorldEngine world;
   private final ModelBakerySubsystem modelBakery;
   private Consumer<BuiltSection> resultConsumer;
+  private volatile BooleanSupplier workLimiter = () -> true;
+  private volatile LongPredicate taskNeeded = p -> true;
   private final boolean emitMeshlets;
   private final TaskPriorityMode priorityMode;
 
@@ -117,8 +121,21 @@ public class RenderGenerationService {
             // that only fail because their block models haven't been baked yet (gl41metal's bakery
             // runs on the render thread, so workers can massively outpace it).
             () ->
-                modelBakery.getProcessingCount() < 400
-                    || RenderGenerationService.MESH_FAILED_COUNTER.get() < 500);
+                this.workLimiter.getAsBoolean()
+                    && (modelBakery.getProcessingCount() < 400
+                        || RenderGenerationService.MESH_FAILED_COUNTER.get() < 500));
+  }
+
+  public void setWorkLimiter(BooleanSupplier limiter) {
+    this.workLimiter = limiter;
+  }
+
+  public void setTaskValidity(LongPredicate predicate) {
+    this.taskNeeded = predicate;
+  }
+
+  public int pendingTasks() {
+    return this.taskQueueCount.get();
   }
 
   public void setResultConsumer(Consumer<BuiltSection> consumer) {
@@ -191,6 +208,12 @@ public class RenderGenerationService {
         throw new IllegalStateException();
       }
       this.taskMapLock.unlockWrite(stamp);
+    }
+
+    if (!this.taskNeeded.test(task.position)) {
+      if (task.section != null) this.holdingSectionCount.decrementAndGet();
+      if (section != null) section.release();
+      return;
     }
 
     if (section == null) {

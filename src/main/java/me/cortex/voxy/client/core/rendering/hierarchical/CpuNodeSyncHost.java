@@ -1,10 +1,11 @@
 package me.cortex.voxy.client.core.rendering.hierarchical;
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import it.unimi.dsi.fastutil.longs.LongLinkedOpenHashSet;
+import java.util.concurrent.ConcurrentHashMap;
 import me.cortex.voxy.client.core.rendering.SectionUpdateRouter;
 import me.cortex.voxy.client.core.rendering.building.BuiltSection;
+import me.cortex.voxy.client.core.rendering.building.GeometryResultQueue;
 import me.cortex.voxy.client.core.rendering.building.RenderGenerationService;
 import me.cortex.voxy.client.core.rendering.geometry.BasicAsyncGeometryManager;
 import me.cortex.voxy.common.util.MemoryBuffer;
@@ -40,18 +41,20 @@ public final class CpuNodeSyncHost implements AutoCloseable {
   private final SectionUpdateRouter router = new SectionUpdateRouter();
   private final BasicAsyncGeometryManager geometryManager;
   private final NodeManager manager;
-  private final ConcurrentLinkedDeque<Long> topLevelAdds = new ConcurrentLinkedDeque<>();
-  private final ConcurrentLinkedDeque<Long> topLevelRemoves = new ConcurrentLinkedDeque<>();
-  private final ConcurrentLinkedDeque<WorldSection> childUpdateQueue =
-      new ConcurrentLinkedDeque<>();
-  private final ConcurrentLinkedDeque<BuiltSection> geometryUpdateQueue =
-      new ConcurrentLinkedDeque<>();
+  private final LongLinkedOpenHashSet topLevelAdds = new LongLinkedOpenHashSet();
+  private final LongLinkedOpenHashSet topLevelRemoves = new LongLinkedOpenHashSet();
+  private final ConcurrentHashMap<Long, Byte> childUpdateQueue = new ConcurrentHashMap<>();
+  private final GeometryResultQueue geometryUpdateQueue;
+  private final RenderGenerationService renderService;
+  private final long geometryCapacity;
+  private boolean geometryStalled;
+  private long lastBudgetLog;
+  private long capacityDeferrals;
+  private long collapsedSubtrees;
   private final IntOpenHashSet topNodeAdds = new IntOpenHashSet();
   private final IntOpenHashSet topNodeRemoves = new IntOpenHashSet();
-  private final LongOpenHashSet nativeRequestsInFlight = new LongOpenHashSet();
-  private boolean closed;
+  private volatile boolean closed;
   private long nativeRequestsProcessed;
-  private long duplicateNativeRequestsSkipped;
   private long nodeUploads;
   private long metadataUploads;
   private long geometryUploads;
@@ -64,6 +67,14 @@ public final class CpuNodeSyncHost implements AutoCloseable {
       long geometryCapacityBytes,
       RenderGenerationService renderService) {
     this.geometryManager = new BasicAsyncGeometryManager(maxSectionCount, geometryCapacityBytes);
+    this.geometryCapacity = geometryCapacityBytes;
+    this.renderService = renderService;
+    this.geometryUpdateQueue =
+        new GeometryResultQueue(
+            Math.max(16L << 20, Math.min(64L << 20, geometryCapacityBytes / 4)));
+    renderService.setWorkLimiter(this.geometryUpdateQueue::canBuild);
+    renderService.setTaskValidity(
+        p -> !this.closed && (this.router.get(p) & WorldEngine.UPDATE_TYPE_BLOCK_BIT) != 0);
     this.router.setCallbacks(
         renderService::enqueueTask, renderService::enqueueTask, this::submitChildChange);
     renderService.setResultConsumer(this::submitGeometryResult);
@@ -77,11 +88,13 @@ public final class CpuNodeSyncHost implements AutoCloseable {
   }
 
   public void addTopLevel(long sectionPos) {
-    this.topLevelAdds.add(sectionPos);
+    this.topLevelRemoves.remove(sectionPos);
+    if (!this.manager.hasTopLevelNode(sectionPos)) this.topLevelAdds.add(sectionPos);
   }
 
   public void removeTopLevel(long sectionPos) {
-    this.topLevelRemoves.add(sectionPos);
+    this.topLevelAdds.remove(sectionPos);
+    if (this.manager.hasTopLevelNode(sectionPos)) this.topLevelRemoves.add(sectionPos);
   }
 
   public void worldEvent(WorldSection section, int flags, int neighborMask) {
@@ -112,12 +125,22 @@ public final class CpuNodeSyncHost implements AutoCloseable {
     }
   }
 
-  public void drain(long[] metalRequests, Sink sink) {
+  public void drain(long[] metalRequests, long[] evictions, Sink sink) {
+    for (long position : evictions) {
+      if (this.manager.collapseNode(position)) this.collapsedSubtrees++;
+    }
     this.processMetalRequests(metalRequests);
     this.processTopLevelUpdates();
     this.processChildUpdates();
     this.processGeometryUpdates();
     this.flushSync(sink);
+    if (Boolean.getBoolean("voxy.gl41metal.logGeometryBudget")
+        && System.nanoTime() - this.lastBudgetLog > 5_000_000_000L) {
+      var debug = new java.util.ArrayList<String>();
+      this.addDebug(debug);
+      debug.forEach(me.cortex.voxy.common.Logger::info);
+      this.lastBudgetLog = System.nanoTime();
+    }
   }
 
   public void addDebug(java.util.List<String> debug) {
@@ -130,10 +153,14 @@ public final class CpuNodeSyncHost implements AutoCloseable {
             + (this.geometryManager.getGeometryUsedBytes() >> 20)
             + ", requests="
             + this.nativeRequestsProcessed
-            + ", duplicateRequests="
-            + this.duplicateNativeRequestsSkipped
-            + ", inFlight="
-            + this.nativeRequestsInFlight.size());
+            + ", queuedMb="
+            + (this.geometryUpdateQueue.bytes() >> 20)
+            + ", pendingBuilds="
+            + this.renderService.pendingTasks()
+            + ", deferrals="
+            + this.capacityDeferrals
+            + ", collapsed="
+            + this.collapsedSubtrees);
     debug.add(
         "Voxy GL41Metal hierarchy uploads: node="
             + this.nodeUploads
@@ -152,10 +179,6 @@ public final class CpuNodeSyncHost implements AutoCloseable {
       return;
     }
     for (long request : requests) {
-      if (!this.nativeRequestsInFlight.add(request)) {
-        this.duplicateNativeRequestsSkipped++;
-        continue;
-      }
       this.manager.processRequest(request);
       this.nativeRequestsProcessed++;
     }
@@ -163,44 +186,54 @@ public final class CpuNodeSyncHost implements AutoCloseable {
 
   private void processTopLevelUpdates() {
     for (int i = 0; i < MAX_TOP_LEVEL_UPDATES_PER_FRAME; i++) {
-      Long section = this.topLevelRemoves.poll();
-      if (section == null) {
-        break;
-      }
+      if (this.topLevelRemoves.isEmpty()) break;
+      long section = this.topLevelRemoves.removeFirstLong();
       this.manager.removeTopLevelNode(section);
     }
-    for (int i = 0; i < MAX_TOP_LEVEL_UPDATES_PER_FRAME; i++) {
-      Long section = this.topLevelAdds.poll();
-      if (section == null) {
-        break;
-      }
+    for (int i = 0;
+        i < MAX_TOP_LEVEL_UPDATES_PER_FRAME && this.renderService.pendingTasks() < 512;
+        i++) {
+      if (this.topLevelAdds.isEmpty()) break;
+      long section = this.topLevelAdds.removeFirstLong();
       this.manager.insertTopLevelNode(section);
     }
   }
 
   private void processChildUpdates() {
-    for (int i = 0; i < MAX_CHILD_UPDATES_PER_FRAME; i++) {
-      WorldSection section = this.childUpdateQueue.poll();
-      if (section == null) {
-        break;
-      }
-      try {
-        this.manager.processChildChange(section.key, section.getNonEmptyChildren());
-        this.nativeRequestsInFlight.remove(section.key);
-      } finally {
-        section.release();
-      }
+    var iterator = this.childUpdateQueue.keySet().iterator();
+    for (int i = 0; i < MAX_CHILD_UPDATES_PER_FRAME && iterator.hasNext(); i++) {
+      long position = iterator.next();
+      Byte mask = this.childUpdateQueue.remove(position);
+      if (mask != null) this.manager.processChildChange(position, mask);
     }
   }
 
+  public long geometryUsedBytes() {
+    return this.geometryManager.getGeometryUsedBytes();
+  }
+
+  public boolean capacityPressure() {
+    return this.geometryStalled || this.geometryUsedBytes() > this.geometryCapacity * 4 / 5;
+  }
+
+  public int requestBudget() {
+    return this.capacityPressure()
+        ? 0
+        : Math.max(0, Math.min(64, (512 - this.renderService.pendingTasks()) / 8));
+  }
+
   private void processGeometryUpdates() {
-    for (int i = 0; i < MAX_GEOMETRY_UPDATES_PER_FRAME; i++) {
-      BuiltSection section = this.geometryUpdateQueue.poll();
+    this.geometryStalled = false;
+    long uploaded = 0;
+    for (int i = 0; i < MAX_GEOMETRY_UPDATES_PER_FRAME && uploaded < (2L << 20); i++) {
+      BuiltSection section =
+          this.geometryUpdateQueue.process(this.manager::tryProcessGeometryResult);
       if (section == null) {
+        this.geometryStalled = !this.geometryUpdateQueue.isEmpty();
+        if (this.geometryStalled) this.capacityDeferrals++;
         break;
       }
-      this.manager.processGeometryResult(section);
-      this.nativeRequestsInFlight.remove(section.position);
+      if (section.geometryBuffer != null) uploaded += section.geometryBuffer.size;
     }
   }
 
@@ -224,10 +257,8 @@ public final class CpuNodeSyncHost implements AutoCloseable {
 
     var removals = this.geometryManager.getHeapRemovals();
     if (!removals.isEmpty()) {
-      // These are geometry arena element offsets, not section ids. Section residency is invalidated
-      // through the metadata update stream below. TODO(gl41metal): reclaim native geometry ranges
-      // when the
-      // GL41Metal arena grows a real free-list/compaction path.
+      // Java already returned these ranges to AllocationArena. GL buffer writes are ordered
+      // after previous draws in the same context; metadata invalidation is streamed below.
       removals.clear();
     }
 
@@ -280,12 +311,8 @@ public final class CpuNodeSyncHost implements AutoCloseable {
     }
   }
 
-  private void submitChildChange(WorldSection section) {
-    if (this.closed) {
-      return;
-    }
-    section.acquire();
-    this.childUpdateQueue.add(section);
+  private synchronized void submitChildChange(WorldSection section) {
+    if (!this.closed) this.childUpdateQueue.put(section.key, section.getNonEmptyChildren());
   }
 
   private void submitGeometryResult(BuiltSection section) {
@@ -293,20 +320,14 @@ public final class CpuNodeSyncHost implements AutoCloseable {
       section.free();
       return;
     }
-    this.geometryUpdateQueue.add(section);
+    this.geometryUpdateQueue.put(section);
   }
 
   @Override
-  public void close() {
+  public synchronized void close() {
     this.closed = true;
-    WorldSection section;
-    while ((section = this.childUpdateQueue.poll()) != null) {
-      section.release();
-    }
-    BuiltSection geometry;
-    while ((geometry = this.geometryUpdateQueue.poll()) != null) {
-      geometry.free();
-    }
+    this.childUpdateQueue.clear();
+    this.geometryUpdateQueue.close();
     if (!this.geometryManager.getUploads().isEmpty()) {
       var iter = this.geometryManager.getUploads().values().iterator();
       while (iter.hasNext()) {

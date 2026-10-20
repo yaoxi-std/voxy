@@ -316,3 +316,31 @@ if (!isInGHA) {
         }
     }
 }
+
+def geometryTest = sourceSets.create('geometryTest') {
+    java.srcDir rootProject.file('src/test/java')
+    compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+    runtimeClasspath += sourceSets.main.runtimeClasspath
+}
+tasks.register('geometryBudgetTest', JavaExec) {
+    description = 'Verifies geometry pressure, hierarchy recovery and bounded native-memory handoff'
+    group = 'verification'
+    dependsOn tasks.named('geometryTestClasses')
+    classpath = geometryTest.runtimeClasspath
+    mainClass = 'me.cortex.voxy.client.core.rendering.GeometryBudgetTest'
+}
+tasks.named('check') { dependsOn tasks.named('geometryBudgetTest') }
+
+if (project.hasProperty('geometryValidation')) {
+    def validation = sourceSets.create('validation') {
+        java.srcDir rootProject.file('src/validation/java')
+        resources.srcDir rootProject.file('src/validation/resources')
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+    loom.mods { voxy_validation { sourceSet validation } }
+    tasks.named('runClient') {
+        dependsOn tasks.named('validationClasses')
+        classpath += validation.output
+    }
+}

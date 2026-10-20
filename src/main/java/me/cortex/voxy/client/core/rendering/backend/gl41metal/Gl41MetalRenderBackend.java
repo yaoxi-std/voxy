@@ -53,7 +53,7 @@ public final class Gl41MetalRenderBackend implements VoxyRenderBackend {
     this.terrainResources = new TerrainResources(context);
     this.drawlistRenderer =
         new DrawlistOpaqueRenderer(
-            TerrainResources.maxResidentSections(), TerrainResources.geometryCapacityBytes());
+            TerrainResources.maxResidentSections(), this.terrainResources.geometryCapacityBytes());
     this.terrainResources.setAtlasMirror(this.drawlistRenderer);
     this.terrainResources.setDrawlistMirror(this.drawlistRenderer);
     Logger.info("Created Voxy GL41Metal drawlist backend: " + this.slots.description());
@@ -117,6 +117,11 @@ public final class Gl41MetalRenderBackend implements VoxyRenderBackend {
   private RenderFrame submitMetalFrame(RenderFrameContext context) {
     this.releaseHeldTranslucentSlot();
 
+    // A timed-out previous Metal submission may still read the shared hierarchy. Skip this
+    // frame instead of mutating it or turning the configured bounded wait into a blocking wait.
+    if (!NativeBindings.canUpdateTerrain(this.slots.nativeHandle())) {
+      return new Frame(context, this.nextFrameId++, -1, new Matrix4f(), new Matrix4f());
+    }
     this.terrainResources.tick(context, this.slots.nativeHandle());
 
     if (context.matrices() == null) {
