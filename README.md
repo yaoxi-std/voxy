@@ -55,6 +55,8 @@ near-scene depth occlusion.
 Backend selection is automatic: capable systems use GL46, while supported
 macOS systems fall back to GL41Metal when GL46 is unavailable.
 
+GL41Metal keeps geometry within a bounded pool, retains coarse LOD under memory pressure, and reclaims unused finer subtrees. See [geometry memory management and validation](docs/gl41metal-memory.md) for capacity settings and development checks.
+
 ## Shader-pack support
 
 Iris shader packs are supported through a bridge that exposes Voxy depth,

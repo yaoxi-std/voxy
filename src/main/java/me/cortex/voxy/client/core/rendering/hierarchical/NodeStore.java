@@ -289,6 +289,8 @@ public final class NodeStore {
     // isEligibleForCleaning |= this.getNodeType()
 
     flags |= (short) (isEligibleForCleaning ? 1 << 5 : 0); // 1 bit
+    // Bit 6 exposes actual child availability; consumers must not expand an empty top-level leaf.
+    flags |= (short) (this.getNodeChildExistence(nodeId) != 0 ? 1 << 6 : 0);
 
     {
       int geometry = this.getNodeGeometry(nodeId);

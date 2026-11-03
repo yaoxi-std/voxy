@@ -50,6 +50,8 @@ Metal 负责远景地形选择；OpenGL 和 Iris 继续负责光栅化、近景�
 后端会自动选择：能力足够的系统使用 GL46；GL46 不可用时，受支持的 macOS
 系统会回退到 GL41Metal。
 
+GL41Metal 使用有容量上限的几何池，在内存压力下保留较粗的 LOD，并回收不再需要的细节子树。容量配置和开发验证流程见[几何内存管理说明](docs/gl41metal-memory.md)。
+
 ## 光影包支持
 
 本分支通过 Iris bridge 向远景地形 pass 提供 Voxy 深度、sampler、矩阵和兼容的

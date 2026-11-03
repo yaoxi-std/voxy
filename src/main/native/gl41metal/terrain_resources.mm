@@ -15,6 +15,7 @@ void clearTerrainCounters(TerrainResources* terrain) {
   terrain->removedTopNodes = 0;
   terrain->topNodeCount = 0;
   terrain->pendingRequests.clear();
+  terrain->pendingEvictions.clear();
 }
 
 bool createSlotFrameResources(Slot* slot, NativeContext* context, TerrainResources* terrain,
@@ -37,11 +38,12 @@ bool createSlotFrameResources(Slot* slot, NativeContext* context, TerrainResourc
   frame->worklist = [context->device
       newBufferWithLength:static_cast<NSUInteger>(terrain->maxWorklistItems) * WORKLIST_ITEM_BYTES
                   options:MTLResourceStorageModeShared];
+  frame->evictionQueue = [context->device newBufferWithLength:(1 + 256 * 2) * sizeof(uint32_t)
+                                                      options:MTLResourceStorageModeShared];
   frame->sceneUniform = [context->device newBufferWithLength:SCENE_UNIFORM_BYTES
                                                      options:MTLResourceStorageModeShared];
   frame->translucentWorklistCounter =
-      [context->device newBufferWithLength:sizeof(uint32_t)
-                                   options:MTLResourceStorageModeShared];
+      [context->device newBufferWithLength:sizeof(uint32_t) options:MTLResourceStorageModeShared];
   frame->translucentWorklist = [context->device
       newBufferWithLength:static_cast<NSUInteger>(terrain->maxWorklistItems) * WORKLIST_ITEM_BYTES
                   options:MTLResourceStorageModeShared];
@@ -55,9 +57,9 @@ bool createSlotFrameResources(Slot* slot, NativeContext* context, TerrainResourc
       newBufferWithLength:static_cast<NSUInteger>(terrain->maxOpaqueRangeCommands) *
                           sizeof(uint32_t)
                   options:MTLResourceStorageModeShared];
-  if (frame->queueMeta == nil || frame->scratchQueueA == nil || frame->scratchQueueB == nil ||
-      frame->requestQueue == nil || frame->worklistCounter == nil || frame->worklist == nil ||
-      frame->sceneUniform == nil ||
+  if (frame->evictionQueue == nil || frame->queueMeta == nil || frame->scratchQueueA == nil ||
+      frame->scratchQueueB == nil || frame->requestQueue == nil || frame->worklistCounter == nil ||
+      frame->worklist == nil || frame->sceneUniform == nil ||
       frame->translucentWorklistCounter == nil || frame->translucentWorklist == nil ||
       frame->opaqueRangeCounter == nil || frame->opaqueRangeCounts == nil ||
       frame->opaqueRangeBaseVertices == nil) {
@@ -71,6 +73,7 @@ bool createSlotFrameResources(Slot* slot, NativeContext* context, TerrainResourc
 
 void clearSlotFrameResources(FrameResources* frame, TerrainResources* terrain) {
   if (frame == nullptr) return;
+  std::memset([frame->evictionQueue contents], 0, sizeof(uint32_t));
   std::memset([frame->queueMeta contents], 0, MAX_LOD_ITERATIONS * 4 * sizeof(uint32_t));
   std::memset([frame->scratchQueueA contents], 0xff,
               static_cast<size_t>(terrain->maxTraversalQueue) * sizeof(uint32_t));
@@ -91,6 +94,7 @@ void clearSlotFrameResources(FrameResources* frame, TerrainResources* terrain) {
 
 void clearTraversalScratch(FrameResources* frame, TerrainResources*) {
   if (frame == nullptr) return;
+  std::memset([frame->evictionQueue contents], 0, sizeof(uint32_t));
   std::memset([frame->queueMeta contents], 0, MAX_LOD_ITERATIONS * 4 * sizeof(uint32_t));
   std::memset([frame->requestQueue contents], 0, sizeof(uint32_t));
   std::memset([frame->worklistCounter contents], 0, sizeof(uint32_t));
@@ -112,8 +116,7 @@ static uint32_t sectionQuadCount(const uint32_t* meta) {
          (meta[6] & 0xffffu) + (meta[6] >> 16) + (meta[7] & 0xffffu) + (meta[7] >> 16);
 }
 
-static void updateSectionResidency(TerrainResources* terrain, int sectionId,
-                                   const uint32_t* meta) {
+static void updateSectionResidency(TerrainResources* terrain, int sectionId, const uint32_t* meta) {
   uint32_t quadCount = sectionQuadCount(meta);
   TerrainSectionSlot& slot = terrain->sections[sectionId];
   if (slot.resident) {
@@ -148,8 +151,8 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_c
   @autoreleasepool {
     NativeContext* context = requireContext(env, handle);
     if (context == nullptr) return;
-    if (maxSections <= 0 || maxNodes <= 0 || maxTraversalQueue <= 0 ||
-        maxTraversalRequests <= 0 || maxWorklistItems <= 0 || maxOpaqueRangeCommands <= 0) {
+    if (maxSections <= 0 || maxNodes <= 0 || maxTraversalQueue <= 0 || maxTraversalRequests <= 0 ||
+        maxWorklistItems <= 0 || maxOpaqueRangeCommands <= 0) {
       throwJava(env, "GL41Metal terrain resources received invalid dimensions");
       return;
     }
@@ -162,12 +165,23 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_c
     terrain->maxTraversalRequests = maxTraversalRequests;
     terrain->maxWorklistItems = maxWorklistItems;
     terrain->maxOpaqueRangeCommands = maxOpaqueRangeCommands;
+    terrain->lastDescended =
+        [context->device newBufferWithLength:static_cast<NSUInteger>(maxNodes) * sizeof(uint32_t)
+                                     options:MTLResourceStorageModeShared];
+    if (terrain->lastDescended == nil) {
+      throwJava(env, "GL41Metal could not allocate bounded node usage buffer");
+      return;
+    }
+    std::memset([terrain->lastDescended contents], 0,
+                static_cast<size_t>(maxNodes) * sizeof(uint32_t));
+    terrain->evictionPipeline =
+        createComputePipeline(env, context, @"collect_evictions", "geometry eviction");
+    if (terrain->evictionPipeline == nil) return;
     terrain->sections.resize(static_cast<size_t>(maxSections));
     terrain->topNodes.reserve(static_cast<size_t>(std::min(maxNodes, maxTraversalQueue)));
-    terrain->sectionMetadata =
-        [context->device newBufferWithLength:static_cast<NSUInteger>(maxSections) *
-                                             SECTION_METADATA_BYTES
-                                     options:MTLResourceStorageModeShared];
+    terrain->sectionMetadata = [context->device
+        newBufferWithLength:static_cast<NSUInteger>(maxSections) * SECTION_METADATA_BYTES
+                    options:MTLResourceStorageModeShared];
     terrain->nodeBuffer =
         [context->device newBufferWithLength:static_cast<NSUInteger>(maxNodes) * NODE_BYTES
                                      options:MTLResourceStorageModeShared];
@@ -184,8 +198,7 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_c
 
     std::memset([terrain->sectionMetadata contents], 0,
                 static_cast<size_t>(maxSections) * SECTION_METADATA_BYTES);
-    std::memset([terrain->nodeBuffer contents], 0,
-                static_cast<size_t>(maxNodes) * NODE_BYTES);
+    std::memset([terrain->nodeBuffer contents], 0, static_cast<size_t>(maxNodes) * NODE_BYTES);
     std::memset([terrain->topNodeBuffer contents], 0xff,
                 static_cast<size_t>(maxTraversalQueue) * sizeof(uint32_t));
     clearTerrainCounters(terrain.get());
@@ -246,9 +259,13 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_u
     throwJava(env, "GL41Metal uploadNode received invalid data");
     return;
   }
-  std::memcpy(static_cast<uint8_t*>([terrain->nodeBuffer contents]) +
-                  static_cast<uint64_t>(nodeId) * NODE_BYTES,
-              reinterpret_cast<const void*>(nodeAddress), NODE_BYTES);
+  auto* destination = static_cast<uint8_t*>([terrain->nodeBuffer contents]) +
+                      static_cast<uint64_t>(nodeId) * NODE_BYTES;
+  if (std::memcmp(destination, reinterpret_cast<const void*>(nodeAddress), 8) != 0) {
+    static_cast<uint32_t*>([terrain->lastDescended contents])[nodeId] = terrain->currentFrame;
+  }
+  terrain->nodeSpan = std::max(terrain->nodeSpan, static_cast<uint32_t>(nodeId + 1));
+  std::memcpy(destination, reinterpret_cast<const void*>(nodeAddress), NODE_BYTES);
   terrain->uploadedNodes++;
 }
 
@@ -296,13 +313,50 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_r
   NativeContext* context = requireContext(env, handle);
   if (context == nullptr || context->terrain == nullptr) return;
   TerrainResources* terrain = context->terrain.get();
-  auto iter = std::find(terrain->topNodes.begin(), terrain->topNodes.end(),
-                        static_cast<uint32_t>(nodeId));
+  auto iter =
+      std::find(terrain->topNodes.begin(), terrain->topNodes.end(), static_cast<uint32_t>(nodeId));
   if (iter != terrain->topNodes.end()) {
     terrain->topNodes.erase(iter);
     terrain->removedTopNodes++;
     refreshTopNodeBuffer(terrain);
   }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_canUpdateTerrain(
+    JNIEnv* env, jclass, jlong handle) {
+  NativeContext* context = requireContext(env, handle);
+  if (context == nullptr) return JNI_FALSE;
+  std::lock_guard<std::mutex> lock(context->mutex);
+  return context->pendingCommandBuffers == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_setGeometryBudget(
+    JNIEnv* env, jclass, jlong handle, jlong usedBytes, jlong capacityBytes, jboolean pressure,
+    jint requestBudget) {
+  NativeContext* context = requireContext(env, handle);
+  if (context == nullptr || context->terrain == nullptr) return;
+  TerrainResources* terrain = context->terrain.get();
+  terrain->geometryPressure = pressure;
+  terrain->geometryFill = static_cast<double>(usedBytes) / std::max<jlong>(1, capacityBytes);
+  terrain->requestBudget = std::clamp<int>(requestBudget, 0, terrain->maxTraversalRequests);
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_pollEvictionCandidates(
+    JNIEnv* env, jclass, jlong handle) {
+  NativeContext* context = requireContext(env, handle);
+  std::vector<uint64_t> positions;
+  if (context != nullptr && context->terrain != nullptr) {
+    std::lock_guard<std::mutex> lock(context->mutex);
+    positions.swap(context->terrain->pendingEvictions);
+  }
+  jlongArray result = env->NewLongArray(static_cast<jsize>(positions.size()));
+  if (result != nullptr && !positions.empty())
+    env->SetLongArrayRegion(result, 0, static_cast<jsize>(positions.size()),
+                            reinterpret_cast<const jlong*>(positions.data()));
+  return result;
 }
 
 JNIEXPORT jlongArray JNICALL
@@ -337,7 +391,7 @@ JNIEXPORT jlongArray JNICALL
 Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_getTerrainStats(
     JNIEnv* env, jclass, jlong handle) {
   NativeContext* context = requireContext(env, handle);
-  jlong values[9] = {};
+  jlong values[11] = {};
   if (context != nullptr && context->terrain != nullptr) {
     TerrainResources* terrain = context->terrain.get();
     values[0] = static_cast<jlong>(terrain->residentSections);
@@ -349,9 +403,11 @@ Java_me_cortex_voxy_client_core_rendering_backend_gl41metal_jni_NativeBindings_g
     values[6] = static_cast<jlong>(terrain->removedTopNodes);
     values[7] = static_cast<jlong>(terrain->topNodeCount);
     values[8] = static_cast<jlong>(terrain->pendingRequests.size());
+    values[9] = static_cast<jlong>(terrain->lodScale * 1024);
+    values[10] = terrain->requestBudget;
   }
-  jlongArray result = env->NewLongArray(9);
-  if (result != nullptr) env->SetLongArrayRegion(result, 0, 9, values);
+  jlongArray result = env->NewLongArray(11);
+  if (result != nullptr) env->SetLongArrayRegion(result, 0, 11, values);
   return result;
 }
 

@@ -133,10 +133,11 @@ static inline uint visible_opaque_quad_count(SectionMeta meta, uint groupMask) {
   }
   return count;
 }
-static inline void emit_opaque_ranges(
-    SectionMeta section, uint groupMask, constant SceneUniform& scene,
-    device atomic_uint* rangeCounter, device uint* rangeCounts,
-    device uint* rangeBaseVertices) {
+static inline void emit_opaque_ranges(SectionMeta section, uint groupMask,
+                                      constant SceneUniform& scene,
+                                      device atomic_uint* rangeCounter,
+                                      device uint* rangeCounts,
+                                      device uint* rangeBaseVertices) {
   uint2 spans[7];
   uint spanCount = 0u;
   uint sourceOffset = section.a.w;
@@ -156,12 +157,12 @@ static inline void emit_opaque_ranges(
   uint commandCount = 0u;
   for (uint i = 0u; i < spanCount; i++) {
     uint spanQuads = spans[i].y - spans[i].x;
-    commandCount += (spanQuads + MAX_QUADS_PER_RANGE - 1u) /
-                    MAX_QUADS_PER_RANGE;
+    commandCount +=
+        (spanQuads + MAX_QUADS_PER_RANGE - 1u) / MAX_QUADS_PER_RANGE;
   }
 
-  uint commandBase = atomic_fetch_add_explicit(
-      &rangeCounter[0], commandCount, memory_order_relaxed);
+  uint commandBase = atomic_fetch_add_explicit(&rangeCounter[0], commandCount,
+                                               memory_order_relaxed);
 
   uint commandOffset = 0u;
   uint capacity = scene.rasterLimits.x;
@@ -376,6 +377,7 @@ kernel void traverse(device Node* nodes [[buffer(0)]],
                      device atomic_uint* opaqueRangeCounter [[buffer(14)]],
                      device uint* opaqueRangeCounts [[buffer(15)]],
                      device uint* opaqueRangeBaseVertices [[buffer(16)]],
+                     device atomic_uint* lastDescended [[buffer(17)]],
                      uint gid [[thread_position_in_grid]]) {
   uint queueCount = queueIdx == 0u
                         ? scene.queueSizes.w
@@ -389,7 +391,11 @@ kernel void traverse(device Node* nodes [[buffer(0)]],
   uint visibility = classifyNode(n, scene);
   if (visibility == 0u) return;
   if (visibility == 3u) return;
-  bool shouldDescend = n.lodLevel != 0u && visibility == 2u;
+  bool shouldDescend =
+      n.lodLevel != 0u && visibility == 2u && (n.flags & (1u << 6u)) != 0u;
+  if (shouldDescend)
+    atomic_store_explicit(&lastDescended[nodeId],
+                          uint(scene.baseSectionFrame.w), memory_order_relaxed);
   bool childQueueOverflow = false;
   if (shouldDescend) {
     if (hasChildren(n)) {
@@ -492,8 +498,7 @@ kernel void traverse(device Node* nodes [[buffer(0)]],
           item.quadBase = section.a.w;
           item.reserved =
               opaqueGroupMask | (section_fingerprint(section) << 8u);
-          item.lodAndQuadCount =
-              (n.lodLevel << 24) | min(qc, 0x00ffffffu);
+          item.lodAndQuadCount = (n.lodLevel << 24) | min(qc, 0x00ffffffu);
           worklist[w] = item;
           emit_opaque_ranges(section, opaqueGroupMask, scene,
                              opaqueRangeCounter, opaqueRangeCounts,
@@ -527,4 +532,28 @@ kernel void traverse(device Node* nodes [[buffer(0)]],
       }
     }
   }
+}
+
+// Only the Metal view/LOD classification decides whether finer children are
+// dispensable. Candidates carry world positions, so node-id reuse cannot evict
+// a different subtree.
+kernel void collect_evictions(device const Node* nodes [[buffer(0)]],
+                              constant SceneUniform& scene [[buffer(9)]],
+                              device atomic_uint* lastDescended [[buffer(17)]],
+                              device atomic_uint* output [[buffer(18)]],
+                              uint gid [[thread_position_in_grid]]) {
+  if (gid >= scene.viewport.z) return;
+  UnpackedNode n = unpackNode(nodes, gid);
+  if (n.lodLevel == 0u || !hasMesh(n) ||
+      (!hasChildren(n) && (!hasRequested(n) || (n.flags & (1u << 6u)) == 0u)))
+    return;
+  uint age = uint(scene.baseSectionFrame.w) -
+             atomic_load_explicit(&lastDescended[gid], memory_order_relaxed);
+  if (age < 30u || classifyNode(n, scene) == 2u) return;
+  uint index = atomic_fetch_add_explicit(&output[0], 1u, memory_order_relaxed);
+  if (index >= 256u) return;
+  atomic_store_explicit(&output[1u + index * 2u], n.rawPos.x,
+                        memory_order_relaxed);
+  atomic_store_explicit(&output[2u + index * 2u], n.rawPos.y,
+                        memory_order_relaxed);
 }

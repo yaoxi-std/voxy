@@ -21,7 +21,7 @@ import net.minecraft.world.level.block.state.BlockState;
 public final class TerrainResources implements AutoCloseable {
   private static final int MAX_RESIDENT_SECTIONS =
       readInt("voxy.gl41metal.residencyMaxSections", 1 << 18, 1024, 1 << 20);
-  private static final long GEOMETRY_CAPACITY_BYTES =
+  private static final long REQUESTED_GEOMETRY_CAPACITY_BYTES =
       (long) readInt("voxy.gl41metal.geometryCapacityMb", 256, 16, 2048) * 1024L * 1024L;
   private static final int MAX_NODES =
       readInt("voxy.gl41metal.maxNodes", 1 << 21, 1024, (1 << 24) - 1);
@@ -40,6 +40,7 @@ public final class TerrainResources implements AutoCloseable {
   private static final long MODEL_BAKE_BUDGET_NANOS =
       readInt("voxy.gl41metal.modelBakeBudgetMs", 4, 1, 100) * 1_000_000L;
 
+  private final long geometryCapacityBytes;
   private final WorldEngine world;
   private final MaterialStore materialStore;
   private final ModelBakerySubsystem modelService;
@@ -55,6 +56,20 @@ public final class TerrainResources implements AutoCloseable {
   private Object2IntMap<BlockState> irisBlockStateMapping;
 
   public TerrainResources(BackendContext context) {
+    long textureLimit =
+        Integer.toUnsignedLong(
+                org.lwjgl.opengl.GL11C.glGetInteger(
+                    org.lwjgl.opengl.GL31C.GL_MAX_TEXTURE_BUFFER_SIZE))
+            * Long.BYTES;
+    this.geometryCapacityBytes = Math.min(REQUESTED_GEOMETRY_CAPACITY_BYTES, textureLimit);
+    if (this.geometryCapacityBytes <= 0)
+      throw new IllegalStateException("GL41Metal has no addressable geometry texture buffer");
+    if (this.geometryCapacityBytes < REQUESTED_GEOMETRY_CAPACITY_BYTES) {
+      Logger.warn(
+          "GL41Metal geometry pool clamped to OpenGL texture-buffer limit: "
+              + this.geometryCapacityBytes
+              + " bytes");
+    }
     this.world = context.world();
     this.materialStore = new MaterialStore();
     this.modelService = new ModelBakerySubsystem(this.world.getMapper(), this.materialStore);
@@ -64,10 +79,10 @@ public final class TerrainResources implements AutoCloseable {
             this.modelService,
             context.serviceManager(),
             false,
-            RenderGenerationService.TaskPriorityMode.FINE_LOD_FIRST);
+            RenderGenerationService.TaskPriorityMode.COARSE_LOD_FIRST);
     this.nodeSyncHost =
         new CpuNodeSyncHost(
-            MAX_NODES, MAX_RESIDENT_SECTIONS, GEOMETRY_CAPACITY_BYTES, this.renderGen);
+            MAX_NODES, MAX_RESIDENT_SECTIONS, this.geometryCapacityBytes, this.renderGen);
     Arrays.stream(this.world.getMapper().getBiomeEntries()).forEach(this.modelService::addBiome);
     this.world.getMapper().setBiomeCallback(this.modelService::addBiome);
     this.world.setDirtyCallback(this::onWorldChanged);
@@ -97,7 +112,16 @@ public final class TerrainResources implements AutoCloseable {
     this.renderDistanceTracker.setCenterAndProcess(frameContext.cameraX(), frameContext.cameraZ());
     this.modelService.tick(MODEL_BAKE_BUDGET_NANOS);
     this.materialStore.drainUploads();
-    this.nodeSyncHost.drain(NativeBindings.pollTraversalRequests(nativeHandle), this.nativeSink);
+    this.nodeSyncHost.drain(
+        NativeBindings.pollTraversalRequests(nativeHandle),
+        NativeBindings.pollEvictionCandidates(nativeHandle),
+        this.nativeSink);
+    NativeBindings.setGeometryBudget(
+        nativeHandle,
+        this.nodeSyncHost.geometryUsedBytes(),
+        this.geometryCapacityBytes,
+        this.nodeSyncHost.capacityPressure(),
+        this.nodeSyncHost.requestBudget());
   }
 
   public void onChunkTrackerReset() {
@@ -151,8 +175,8 @@ public final class TerrainResources implements AutoCloseable {
     return MAX_RESIDENT_SECTIONS;
   }
 
-  public static long geometryCapacityBytes() {
-    return GEOMETRY_CAPACITY_BYTES;
+  public long geometryCapacityBytes() {
+    return this.geometryCapacityBytes;
   }
 
   public static int maxOpaqueRangeCommands() {
@@ -184,7 +208,7 @@ public final class TerrainResources implements AutoCloseable {
         "GL41Metal terrain native resources initialized: maxSections="
             + MAX_RESIDENT_SECTIONS
             + ", geometryCapacity="
-            + GEOMETRY_CAPACITY_BYTES
+            + this.geometryCapacityBytes
             + ", maxNodes="
             + MAX_NODES
             + ", traversalQueue="
@@ -242,6 +266,7 @@ public final class TerrainResources implements AutoCloseable {
     this.closed = true;
     this.world.setDirtyCallback(null);
     this.world.getMapper().setBiomeCallback(null);
+    this.nodeSyncHost.close();
     try {
       this.renderGen.shutdown();
     } catch (Exception e) {
@@ -252,7 +277,6 @@ public final class TerrainResources implements AutoCloseable {
     } catch (Exception e) {
       Logger.error("Error shutting down GL41Metal model service", e);
     }
-    this.nodeSyncHost.close();
     this.materialStore.close();
   }
 

@@ -9,10 +9,12 @@ record TerrainStats(
     long uploadedTopNodes,
     long removedTopNodes,
     int topNodeCount,
-    int pendingRequests) {
+    int pendingRequests,
+    float lodAreaScale,
+    int requestBudget) {
   static TerrainStats fromNative(long[] values) {
     if (values.length < 9) {
-      return new TerrainStats(0, 0, 0, 0, 0, 0, 0, 0, 0);
+      return new TerrainStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0);
     }
     return new TerrainStats(
         (int) values[0],
@@ -23,7 +25,9 @@ record TerrainStats(
         values[5],
         values[6],
         (int) values[7],
-        (int) values[8]);
+        (int) values[8],
+        values.length > 9 ? values[9] / 1024.0f : 1,
+        values.length > 10 ? (int) values[10] : 0);
   }
 
   String compact() {
@@ -44,6 +48,10 @@ record TerrainStats(
         + ", removedTopNodes="
         + this.removedTopNodes
         + ", pendingRequests="
-        + this.pendingRequests;
+        + this.pendingRequests
+        + ", lodAreaScale="
+        + this.lodAreaScale
+        + ", requestBudget="
+        + this.requestBudget;
   }
 }

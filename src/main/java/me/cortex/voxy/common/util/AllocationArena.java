@@ -63,6 +63,12 @@ public class AllocationArena {
 
   }*/
 
+  public boolean canAllocate(int size) {
+    if (size <= 0) throw new IllegalArgumentException();
+    return this.FREE.iterator(((long) size << ADDR_BITS) - 1).hasNext()
+        || size <= this.sizeLimit - this.totalSize;
+  }
+
   public long alloc(int size) { // TODO: add alignment support
     if (size == 0) throw new IllegalArgumentException();
     // This is stupid, iterator is not inclusive

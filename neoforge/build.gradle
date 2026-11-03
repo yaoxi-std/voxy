@@ -322,3 +322,14 @@ jar {
         }
     }
 }
+
+if (project.hasProperty('geometryValidation')) {
+    def validation = sourceSets.create('validation') {
+        java.srcDir rootProject.file('src/validation/java')
+        resources.srcDir rootProject.file('src/validation/resources')
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+    neoForge.mods { voxy_validation { sourceSet validation } }
+    tasks.named('runClient') { dependsOn tasks.named('validationClasses') }
+}

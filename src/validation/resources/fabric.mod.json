@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "voxy_validation",
+  "version": "1.0.0",
+  "name": "Voxy Geometry Validation",
+  "environment": "client",
+  "mixins": ["voxy-validation.mixins.json"]
+}
